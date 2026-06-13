@@ -26,6 +26,8 @@ AegisWeb is a high-performance, asynchronous Python CLI tool designed to perform
   Logs every run, crawl detail, network metric, and header state into a local database. Offloads database queries to background thread pools to keep the async event loop active.
 * 📝 **Automatic Markdown Report Exporter**  
   Saves audit details inside the `result/<website_name>` directory in a markdown format named with the execution date and time.
+* 💡 **Actionable Fix Suggestor**  
+  Analyzes all anomalies (security, SEO, network latencies, performance data) and yields prioritized step-by-step fix guides complete with HTML tags and Nginx config blocks.
 
 ---
 
@@ -99,6 +101,7 @@ Calculations begin at **100.0%** and apply the following deductions based on fin
 ├── performance.py     # PageSpeed Insights API Wrapper
 ├── scoring.py         # Deductions Scoring Engine
 ├── security.py        # SSL Handshake Auditor & Header Scanner
+├── suggestor.py       # Actionable Remediation Suggestor
 ├── test_analyzer.py   # Unit Test Suite
 └── README.md          # Project Documentation
 ```
