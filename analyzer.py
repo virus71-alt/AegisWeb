@@ -28,6 +28,8 @@ from network import NetworkProfiler
 from security import SecurityScanner
 from performance import PerformanceAgent
 from scoring import calculate_health_score
+from suggestor import generate_suggestions
+from rich.markup import escape
 
 # Custom color theme for premium design feel
 custom_theme = Theme({
@@ -351,6 +353,42 @@ async def run_audit(args: argparse.Namespace) -> int:
             )
         console.print(broken_table)
 
+    # Generate actionable remediation suggestions
+    suggestions = generate_suggestions(
+        crawl_results=crawl_results,
+        network_results={
+            "ttfb_ms": latency_profile.get("ttfb_ms"),
+            "dns_resolution_time_ms": dns_profile.get("total_resolution_time_ms")
+        },
+        security_headers=security_headers,
+        ssl_profile=ssl_profile,
+        perf_profile=perf_profile
+    )
+
+    if suggestions:
+        console.print(Rule("[bold warning]Actionable Remediation & Fix Suggestions[/bold warning]"))
+        severity_rank = {"High": 1, "Medium": 2, "Low": 3}
+        sorted_suggestions = sorted(suggestions, key=lambda s: severity_rank.get(s["severity"], 4))
+
+        for sug in sorted_suggestions:
+            sev = sug["severity"]
+            if sev == "High":
+                color = "danger"
+                prefix = "[CRITICAL]"
+            elif sev == "Medium":
+                color = "warning"
+                prefix = "[WARNING]"
+            else:
+                color = "success"
+                prefix = "[INFO]"
+
+            title_text = f"[{color}]{prefix} {escape(sug['title'])} ({sev} Severity)[/{color}] - [dim]{escape(sug['category'])}[/dim]"
+            body = f"[bold]Issue Detected:[/bold] {escape(sug['issue'])}\n[bold]How to Fix:[/bold] {escape(sug['remediation'])}"
+            if sug.get("snippet"):
+                body += f"\n\n[bold]Configuration / Code Snippet:[/bold]\n{escape(sug['snippet'])}"
+
+            console.print(Panel(body, title=title_text, border_style=color, expand=True))
+
     # 5. Export result to Markdown file inside result/<website_name> folder
     # website name from url netloc
     parsed_url = urlparse(url)
@@ -478,6 +516,24 @@ async def run_audit(args: argparse.Namespace) -> int:
                 str(bp.get("redirect_chain_length", 0))
             ])
         md_content += to_markdown_table(bl_headers, bl_rows) + "\n"
+
+    # 6. Actionable Suggestions in Markdown
+    md_content += "## Actionable Fix Suggestions\n\n"
+    if suggestions:
+        severity_rank = {"High": 1, "Medium": 2, "Low": 3}
+        sorted_suggestions = sorted(suggestions, key=lambda s: severity_rank.get(s["severity"], 4))
+        for sug in sorted_suggestions:
+            sev = sug["severity"]
+            emoji = "🔴" if sev == "High" else ("🟡" if sev == "Medium" else "🟢")
+            md_content += f"### {emoji} {sug['title']} ({sev} Severity)\n\n"
+            md_content += f"- **Category**: {sug['category']}\n"
+            md_content += f"- **Issue Detected**: {sug['issue']}\n"
+            md_content += f"- **Remediation**: {sug['remediation']}\n"
+            if sug.get("snippet"):
+                md_content += f"\n```text\n{sug['snippet']}\n```\n"
+            md_content += "\n---\n\n"
+    else:
+        md_content += "No remediation issues detected! Everything is configured perfectly.\n\n"
 
     # Write report file
     try:

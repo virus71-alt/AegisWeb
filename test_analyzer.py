@@ -14,6 +14,7 @@ from db import DatabaseManager
 from scoring import calculate_health_score
 from security import SecurityScanner
 from network import NetworkProfiler
+from suggestor import generate_suggestions
 
 
 class TestScoringEngine(unittest.TestCase):
@@ -156,6 +157,59 @@ class TestDatabaseManager(unittest.TestCase):
         history = self.db._get_history(url="https://unittest-example.com")
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["overall_health_score"], 92.5)
+
+
+class TestSuggestor(unittest.TestCase):
+    """Tests that remediation suggestions are generated properly based on raw errors."""
+
+    def test_security_header_suggestions(self):
+        """Verifies missing security headers generate specific Nginx configuration solutions."""
+        suggestions = generate_suggestions(
+            crawl_results=[],
+            network_results={},
+            security_headers=[
+                {"header_name": "Strict-Transport-Security", "is_present": False},
+                {"header_name": "Content-Security-Policy", "is_present": False}
+            ],
+            ssl_profile={},
+            perf_profile={}
+        )
+        # We expect two suggestions corresponding to these missing headers
+        self.assertEqual(len(suggestions), 2)
+        titles = [s["title"] for s in suggestions]
+        self.assertIn("Implement HTTP Strict Transport Security (HSTS)", titles)
+        self.assertIn("Configure Content Security Policy (CSP)", titles)
+
+        # Verify snippet is present
+        hsts_sug = next(s for s in suggestions if "HSTS" in s["title"])
+        self.assertIsNotNone(hsts_sug["snippet"])
+        self.assertIn("max-age=63072000", hsts_sug["snippet"])
+
+    def test_seo_suggestions(self):
+        """Verifies SEO anomalies generate correct fix instructions."""
+        suggestions = generate_suggestions(
+            crawl_results=[
+                {
+                    "url": "https://example.com/page1",
+                    "is_broken": False,
+                    "title": "",  # missing title
+                    "meta_description": "",  # missing description
+                    "missing_canonical": True,
+                    "missing_alt_images_count": 5,
+                    "h1_count": 0
+                }
+            ],
+            network_results={},
+            security_headers=[],
+            ssl_profile={},
+            perf_profile={}
+        )
+        titles = [s["title"] for s in suggestions]
+        self.assertIn("Add Missing Title Tags on 1 Pages", titles)
+        self.assertIn("Add Missing Meta Descriptions on 1 Pages", titles)
+        self.assertIn("Add Canonical Tags on 1 Pages", titles)
+        self.assertIn("Define Alt Attributes for 5 Images", titles)
+        self.assertIn("Fix H1 Tag Structure Anomalies on 1 Pages", titles)
 
 
 if __name__ == "__main__":
