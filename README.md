@@ -28,6 +28,8 @@ AegisWeb is a high-performance, asynchronous Python CLI tool designed to perform
   Saves audit details inside the `result/<website_name>` directory in a markdown format named with the execution date and time.
 * 💡 **Actionable Fix Suggestor**  
   Analyzes all anomalies (security, SEO, network latencies, performance data) and yields prioritized step-by-step fix guides complete with HTML tags and Nginx config blocks.
+* 🤖 **AI Agent Remediation Prompt Exporter**  
+  Automatically generates a highly descriptive Markdown prompt specifications file saved inside `fixprompt/<website_name>/<timestamp>_prompt.md`. This prompt can be directly copy-pasted into any AI coding assistant to automatically implement the requested security and SEO fixes.
 
 ---
 
