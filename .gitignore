@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database files
+*.db
+*.sqlite3
+
+# Local application outputs
+result/
+results/
+fixprompt/
+fixprompts/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

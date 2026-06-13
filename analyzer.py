@@ -543,6 +543,53 @@ async def run_audit(args: argparse.Namespace) -> int:
     except Exception as e:
         console.print(f"\n[danger]Failed to save report file:[/danger] {str(e)}")
 
+    # 7. Generate and export AI Remediation Prompt
+    prompt_filename = current_time.strftime("%Y-%m-%d_%H-%M-%S") + "_prompt.md"
+    prompt_dir = os.path.join("fixprompt", website_name)
+    os.makedirs(prompt_dir, exist_ok=True)
+    prompt_filepath = os.path.join(prompt_dir, prompt_filename)
+
+    prompt_content = f"""# AI Agent Remediation Prompt: Resolve Security & SEO Issues for {url}
+
+You are an expert Backend Developer, Security Engineer, and SEO Consultant. Your goal is to write code changes and configurations to resolve the website health, security, and SEO diagnostics identified by AegisWeb for the website: **{url}**.
+
+Current Overall Audit Health Score: **{score:.1f}%**
+
+Below is a categorized list of issues discovered on the site, along with step-by-step remediation plans and recommended configurations. Please write code edits, create files, or write server configuration blocks as requested.
+
+---
+
+"""
+
+    if suggestions:
+        severity_rank = {"High": 1, "Medium": 2, "Low": 3}
+        sorted_suggestions = sorted(suggestions, key=lambda s: severity_rank.get(s["severity"], 4))
+        for sug in sorted_suggestions:
+            sev = sug["severity"]
+            emoji = "🔴" if sev == "High" else ("🟡" if sev == "Medium" else "🟢")
+            prompt_content += f"## {emoji} [Severity: {sev}] {sug['title']}\n\n"
+            prompt_content += f"- **Target Area**: {sug['category']}\n"
+            prompt_content += f"- **Issue Identified**: {sug['issue']}\n"
+            prompt_content += f"- **How to Fix**: {sug['remediation']}\n"
+            if sug.get("snippet"):
+                prompt_content += f"- **Configuration / Code Template**:\n```text\n{sug['snippet']}\n```\n"
+            prompt_content += "\n---\n\n"
+    else:
+        prompt_content += "No security or SEO issues were identified on this domain! Everything is configured perfectly.\n\n"
+
+    prompt_content += """## Final Deliverable Instructions:
+1. Provide a step-by-step implementation guide detailing where to paste the server header configurations (e.g., in Nginx config blocks or .htaccess).
+2. Write exact HTML markup patches (for titles, meta descriptions, canonical links, and image alts) in complete files or side-by-side unified diffs.
+3. Ensure all code is highly secure, efficient, and formatted according to industry best practices.
+"""
+
+    try:
+        with open(prompt_filepath, "w", encoding="utf-8") as f:
+            f.write(prompt_content)
+        console.print(f"[success]AI remediation prompt generated at:[/success] {prompt_filepath}")
+    except Exception as e:
+        console.print(f"[danger]Failed to save AI remediation prompt:[/danger] {str(e)}")
+
     return 0
 
 
