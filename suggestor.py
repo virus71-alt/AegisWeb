@@ -242,9 +242,24 @@ def generate_suggestions(
     pages_with_alt_issues = []
     h1_anomalies_pages = []
 
+    seen_final_urls = set()
     for page in crawl_results:
         if page.get("is_broken", False):
             continue
+
+        # Skip pages that were verified (status/redirect only) but never HTML-parsed,
+        # and non-HTML resources (PDFs, images). Their title/desc/h1 are placeholders,
+        # so checking them produces false "missing title/description/h1" findings.
+        if not page.get("parsed", False):
+            continue
+
+        # Evaluate each destination once. Pages reachable under multiple URL spellings
+        # (e.g. "/" vs "/index.html") share a final_url; counting both produces false
+        # "duplicate title/description" findings.
+        final_url = page.get("final_url") or page.get("url")
+        if final_url in seen_final_urls:
+            continue
+        seen_final_urls.add(final_url)
 
         url = page.get("url")
         title = page.get("title")

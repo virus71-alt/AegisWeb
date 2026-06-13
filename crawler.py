@@ -88,6 +88,36 @@ class AsyncWebCrawler:
         cleaned = parsed._replace(fragment="").geturl()
         return cleaned
 
+    def _extract_seo_fields(self, html: str, result: Dict[str, Any]) -> BeautifulSoup:
+        """
+        Parses HTML and populates SEO fields (title, meta description, h1 count,
+        canonical, missing image alts) into `result`, marking it as parsed.
+        Returns the BeautifulSoup object so callers can reuse it (e.g. for links).
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        result["parsed"] = True
+
+        title_tag = soup.find("title")
+        if title_tag:
+            result["title"] = title_tag.get_text()
+
+        desc_tag = soup.find("meta", attrs={"name": "description"})
+        if desc_tag:
+            result["meta_description"] = desc_tag.get("content")
+
+        result["h1_count"] = len(soup.find_all("h1"))
+
+        canonical_tag = soup.find("link", rel="canonical")
+        result["missing_canonical"] = canonical_tag is None
+
+        missing_alts = 0
+        for img in soup.find_all("img"):
+            if not img.get("alt") or img.get("alt").strip() == "":
+                missing_alts += 1
+        result["missing_alt_images_count"] = missing_alts
+
+        return soup
+
     async def verify_link(self, client: httpx.AsyncClient, url: str) -> Dict[str, Any]:
         """
         Verifies a link asynchronously (e.g. static assets, depth-exceeded pages, or PDFs).
@@ -101,6 +131,7 @@ class AsyncWebCrawler:
 
         result = {
             "url": url,
+            "final_url": url,
             "status_code": None,
             "redirect_chain_length": 0,
             "is_broken": True,
@@ -108,7 +139,10 @@ class AsyncWebCrawler:
             "meta_description": None,
             "h1_count": 0,
             "missing_alt_images_count": 0,
-            "missing_canonical": False
+            "missing_canonical": False,
+            # Set True below only if the response is HTML and gets parsed. Non-HTML
+            # resources (PDFs, images) stay False so SEO checks correctly skip them.
+            "parsed": False
         }
 
         if not self.can_fetch(url):
@@ -128,7 +162,13 @@ class AsyncWebCrawler:
             )
             result["status_code"] = response.status_code
             result["redirect_chain_length"] = len(response.history)
+            result["final_url"] = self.clean_url(str(response.url))
             result["is_broken"] = response.status_code >= 400
+
+            # Lightweight parse so depth/page-limited pages still get real SEO data
+            # instead of placeholder nulls (which would read as false "missing" findings).
+            if not result["is_broken"] and "text/html" in response.headers.get("Content-Type", ""):
+                self._extract_seo_fields(response.text, result)
         except httpx.TooManyRedirects:
             result["status_code"] = 310
             result["redirect_chain_length"] = 20
@@ -147,6 +187,9 @@ class AsyncWebCrawler:
         """
         result = {
             "url": url,
+            # Destination after following redirects; used to dedupe pages reachable
+            # under multiple URL spellings (e.g. "/" vs "/index.html" vs no trailing slash).
+            "final_url": url,
             "status_code": None,
             "title": None,
             "meta_description": None,
@@ -154,7 +197,9 @@ class AsyncWebCrawler:
             "missing_alt_images_count": 0,
             "redirect_chain_length": 0,
             "is_broken": False,
-            "missing_canonical": False
+            "missing_canonical": False,
+            # Set True only once the response is confirmed HTML and parsed below.
+            "parsed": False
         }
         extracted_links: List[str] = []
 
@@ -172,6 +217,7 @@ class AsyncWebCrawler:
             )
             result["status_code"] = response.status_code
             result["redirect_chain_length"] = len(response.history)
+            result["final_url"] = self.clean_url(str(response.url))
 
             # Check if it's broken
             if response.status_code >= 400:
@@ -184,33 +230,8 @@ class AsyncWebCrawler:
                 # We crawled it, but it's not HTML (could be image, PDF, text etc)
                 return result, extracted_links
 
-            # Parse HTML
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            # Extract Title
-            title_tag = soup.find("title")
-            if title_tag:
-                result["title"] = title_tag.get_text()
-
-            # Extract Meta Description
-            desc_tag = soup.find("meta", attrs={"name": "description"})
-            if desc_tag:
-                result["meta_description"] = desc_tag.get("content")
-
-            # Count <h1> tags
-            result["h1_count"] = len(soup.find_all("h1"))
-
-            # Check for canonical tags
-            canonical_tag = soup.find("link", rel="canonical")
-            result["missing_canonical"] = canonical_tag is None
-
-            # Count missing alt text on image tags
-            img_tags = soup.find_all("img")
-            missing_alts = 0
-            for img in img_tags:
-                if not img.get("alt") or img.get("alt").strip() == "":
-                    missing_alts += 1
-            result["missing_alt_images_count"] = missing_alts
+            # Parse HTML and populate SEO fields (shared with verify_link).
+            soup = self._extract_seo_fields(response.text, result)
 
             # Extract links
             a_tags = soup.find_all("a", href=True)
