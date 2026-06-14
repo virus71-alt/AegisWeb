@@ -26,6 +26,7 @@ from db import DatabaseManager
 from crawler import AsyncWebCrawler
 from network import NetworkProfiler
 from security import SecurityScanner
+from vulnscan import VulnerabilityScanner
 from performance import PerformanceAgent
 from scoring import calculate_health_score
 from suggestor import generate_suggestions
@@ -133,6 +134,15 @@ async def run_audit(args: argparse.Namespace) -> int:
     with console.status("[cyan]Scanning homepage security headers...", spinner="dots"):
         security_headers = await security_scanner.audit_security_headers()
 
+    # 3b. Vulnerability & exposure scan (safe, read-only probing for loopholes)
+    console.print(Rule("[bold magenta]3b. Vulnerability & Exposure Scan[/bold magenta]"))
+    vuln_scanner = VulnerabilityScanner(url)
+    with console.status("[cyan]Probing for exposed files, CORS, cookies, CSP & TLS loopholes...", spinner="dots"):
+        vuln_profile = await vuln_scanner.scan()
+    vuln_findings = vuln_profile.get("findings", [])
+    if vuln_profile.get("error"):
+        console.print(f"[warning]Vulnerability scan note:[/warning] {vuln_profile['error']}")
+
     # 4. PageSpeed Insights Core Web Vitals (optional Performance Metrics Agent)
     console.print(Rule("[bold magenta]4. Performance Metrics (Google PageSpeed)[/bold magenta]"))
     perf_agent = PerformanceAgent(url, api_key=args.api_key)
@@ -151,7 +161,8 @@ async def run_audit(args: argparse.Namespace) -> int:
         network_results={
             "ssl_expiry_days": ssl_profile.get("ssl_expiry_days"),
         },
-        security_headers=security_headers
+        security_headers=security_headers,
+        vuln_findings=vuln_findings
     )
 
     # Save to Database in a transaction
@@ -165,7 +176,8 @@ async def run_audit(args: argparse.Namespace) -> int:
         audit_id=audit_id,
         crawl_results=crawl_results,
         network_results=db_network_results,
-        security_headers=security_headers
+        security_headers=security_headers,
+        vuln_findings=vuln_findings
     )
 
     # Output detailed report using Rich
@@ -266,6 +278,26 @@ async def run_audit(args: argparse.Namespace) -> int:
         headers_table.add_row(header["header_name"], present, val)
     console.print(headers_table)
 
+    # Vulnerability & Exposure Findings Output
+    vuln_table = Table(title="Vulnerability & Exposure Findings", show_header=True, header_style="bold red")
+    vuln_table.add_column("Severity", style="bold", width=10)
+    vuln_table.add_column("Finding", style="cyan")
+    vuln_table.add_column("Evidence", style="dim white")
+
+    if vuln_findings:
+        sev_rank = {"High": 1, "Medium": 2, "Low": 3}
+        for f in sorted(vuln_findings, key=lambda x: sev_rank.get(x["severity"], 4)):
+            sev = f["severity"]
+            sev_disp = (
+                "[danger]High[/danger]" if sev == "High"
+                else "[warning]Medium[/warning]" if sev == "Medium"
+                else "[info]Low[/info]"
+            )
+            vuln_table.add_row(sev_disp, escape(f["title"]), escape(str(f.get("evidence") or "-"))[:60])
+    else:
+        vuln_table.add_row("[success]OK[/success]", "No exposed files or misconfigurations detected", "-")
+    console.print(vuln_table)
+
     # Core Web Vitals Output
     cv_table = Table(title="Performance Metrics (Lighthouse / Web Vitals)", show_header=True, header_style="bold green")
     cv_table.add_column("Metric Name", style="cyan")
@@ -364,6 +396,17 @@ async def run_audit(args: argparse.Namespace) -> int:
         ssl_profile=ssl_profile,
         perf_profile=perf_profile
     )
+
+    # Merge active vulnerability findings into the remediation/AI-prompt pipeline.
+    for f in vuln_findings:
+        suggestions.append({
+            "category": f.get("category", "Security"),
+            "severity": f.get("severity", "Medium"),
+            "title": f.get("title", "Security Finding"),
+            "issue": f.get("issue", ""),
+            "remediation": f.get("remediation", ""),
+            "snippet": f.get("snippet"),
+        })
 
     if suggestions:
         console.print(Rule("[bold warning]Actionable Remediation & Fix Suggestions[/bold warning]"))
@@ -468,6 +511,18 @@ async def run_audit(args: argparse.Namespace) -> int:
             header["value"] or "Missing header! We recommend implementing this to protect your users."
         ])
     md_content += to_markdown_table(sh_headers, sh_rows) + "\n"
+
+    # Vulnerability & Exposure Findings
+    md_content += "## Vulnerability & Exposure Findings\n\n"
+    if vuln_findings:
+        vuln_headers = ["Severity", "Finding", "Evidence"]
+        sev_rank = {"High": 1, "Medium": 2, "Low": 3}
+        vuln_rows = []
+        for f in sorted(vuln_findings, key=lambda x: sev_rank.get(x["severity"], 4)):
+            vuln_rows.append([f["severity"], f["title"], str(f.get("evidence") or "-")])
+        md_content += to_markdown_table(vuln_headers, vuln_rows) + "\n"
+    else:
+        md_content += "No exposed files, CORS, cookie, CSP or TLS misconfigurations were detected.\n\n"
 
     # Performance
     md_content += "## Performance Metrics (Google PageSpeed API)\n\n"
@@ -613,6 +668,7 @@ async def show_history(args: argparse.Namespace) -> int:
     table.add_column("Timestamp", style="white")
     table.add_column("Pages Crawled", style="white", justify="center")
     table.add_column("Broken Links", style="bold red", justify="center")
+    table.add_column("Vulns (H/M)", style="bold red", justify="center")
     table.add_column("SSL Expiry (Days)", style="white", justify="center")
     table.add_column("Health Score", style="bold", justify="right")
 
@@ -631,12 +687,16 @@ async def show_history(args: argparse.Namespace) -> int:
         else:
             ssl_exp_str = "N/A"
 
+        vuln_count = item.get("vuln_findings_count", 0)
+        vuln_str = f"[danger]{vuln_count}[/danger]" if vuln_count > 0 else "[success]0[/success]"
+
         table.add_row(
             str(item["audit_id"]),
             item["url"],
             item["timestamp"],
             str(item["total_pages_crawled"]),
             str(item["broken_links_count"]),
+            vuln_str,
             ssl_exp_str,
             f"[{score_style}]{score:.1f}%[/{score_style}]"
         )

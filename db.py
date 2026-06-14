@@ -98,6 +98,20 @@ class DatabaseManager:
                         FOREIGN KEY (audit_id) REFERENCES audits(id) ON DELETE CASCADE
                     );
                 """)
+
+                # 6. vulnerability_findings table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS vulnerability_findings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        audit_id INTEGER NOT NULL,
+                        category TEXT,
+                        severity TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        issue TEXT,
+                        evidence TEXT,
+                        FOREIGN KEY (audit_id) REFERENCES audits(id) ON DELETE CASCADE
+                    );
+                """)
                 conn.commit()
         finally:
             conn.close()
@@ -152,9 +166,10 @@ class DatabaseManager:
         audit_id: int,
         crawl_results: List[Dict[str, Any]],
         network_results: Dict[str, Any],
-        security_headers: List[Dict[str, Any]]
+        security_headers: List[Dict[str, Any]],
+        vuln_findings: Optional[List[Dict[str, Any]]] = None
     ) -> None:
-        """Synchronous transaction to insert crawl, network, and security data."""
+        """Synchronous transaction to insert crawl, network, security, and vulnerability data."""
         conn = self._get_connection()
         try:
             with conn:
@@ -204,6 +219,21 @@ class DatabaseManager:
                         header.get("value")
                     ))
 
+                # Insert vulnerability findings
+                for finding in (vuln_findings or []):
+                    cursor.execute("""
+                        INSERT INTO vulnerability_findings (
+                            audit_id, category, severity, title, issue, evidence
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        audit_id,
+                        finding.get("category"),
+                        finding.get("severity", "Low"),
+                        finding.get("title"),
+                        finding.get("issue"),
+                        finding.get("evidence")
+                    ))
+
                 conn.commit()
         finally:
             conn.close()
@@ -213,7 +243,8 @@ class DatabaseManager:
         audit_id: int,
         crawl_results: List[Dict[str, Any]],
         network_results: Dict[str, Any],
-        security_headers: List[Dict[str, Any]]
+        security_headers: List[Dict[str, Any]],
+        vuln_findings: Optional[List[Dict[str, Any]]] = None
     ) -> None:
         """Asynchronously saves all the detailed audit results in a single transaction."""
         await asyncio.to_thread(
@@ -221,7 +252,8 @@ class DatabaseManager:
             audit_id,
             crawl_results,
             network_results,
-            security_headers
+            security_headers,
+            vuln_findings
         )
 
     def _get_history(self, url: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -269,6 +301,14 @@ class DatabaseManager:
                 net_row = cursor.fetchone()
                 ssl_expiry = net_row["ssl_expiry_days"] if net_row else None
 
+                # 3. High/Medium vulnerability findings count
+                cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM vulnerability_findings
+                    WHERE audit_id = ? AND severity IN ('High', 'Medium')
+                """, (audit_id,))
+                vuln_count = cursor.fetchone()[0] or 0
+
                 history.append({
                     "audit_id": audit_id,
                     "url": row["url"],
@@ -276,7 +316,8 @@ class DatabaseManager:
                     "overall_health_score": row["overall_health_score"],
                     "total_pages_crawled": total_crawled,
                     "broken_links_count": total_broken,
-                    "ssl_expiry_days": ssl_expiry
+                    "ssl_expiry_days": ssl_expiry,
+                    "vuln_findings_count": vuln_count
                 })
             return history
         finally:
@@ -331,6 +372,15 @@ class DatabaseManager:
             header_rows = cursor.fetchall()
             security_headers = [dict(r) for r in header_rows]
 
+            # Get vulnerability findings
+            cursor.execute("""
+                SELECT category, severity, title, issue, evidence
+                FROM vulnerability_findings
+                WHERE audit_id = ?
+            """, (audit_id,))
+            vuln_rows = cursor.fetchall()
+            vuln_findings = [dict(r) for r in vuln_rows]
+
             return {
                 "audit_id": audit_row["audit_id"],
                 "url": audit_row["url"],
@@ -338,7 +388,8 @@ class DatabaseManager:
                 "overall_health_score": audit_row["overall_health_score"],
                 "crawl_results": crawl_results,
                 "network_results": network_results,
-                "security_headers": security_headers
+                "security_headers": security_headers,
+                "vuln_findings": vuln_findings
             }
         finally:
             conn.close()

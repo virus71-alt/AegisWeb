@@ -11,7 +11,8 @@ from typing import Dict, List, Any, Tuple
 def calculate_health_score(
     crawl_results: List[Dict[str, Any]],
     network_results: Dict[str, Any],
-    security_headers: List[Dict[str, Any]]
+    security_headers: List[Dict[str, Any]],
+    vuln_findings: List[Dict[str, Any]] = None
 ) -> Tuple[float, Dict[str, Any]]:
     """
     Calculates overall website health score based on crawl, network, and security findings.
@@ -20,6 +21,7 @@ def calculate_health_score(
     - Broken internal links (404s/500s/etc.): -5% per occurrence, capped at -30%.
     - Missing security headers: -3% per missing header (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy).
     - SSL expiring in < 30 days: Critical penalty of -25%.
+    - Vulnerability & exposure findings: -10% (High) / -5% (Medium) / -1% (Low) each, capped at -40%.
     - SEO anomalies: -0.5% per instance.
       Anomalies include:
       - Missing page title
@@ -83,7 +85,28 @@ def calculate_health_score(
         pass
     score -= ssl_penalty
 
-    # 4. SEO & Structure anomalies
+    # 4. Vulnerability & exposure findings penalty
+    vuln_findings = vuln_findings or []
+    vuln_weights = {"High": 10.0, "Medium": 5.0, "Low": 1.0}
+    sev_counts = {"High": 0, "Medium": 0, "Low": 0}
+    raw_vuln_penalty = 0.0
+    for finding in vuln_findings:
+        sev = finding.get("severity", "Low")
+        sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        raw_vuln_penalty += vuln_weights.get(sev, 1.0)
+    vuln_penalty = min(40.0, raw_vuln_penalty)
+    if vuln_penalty > 0:
+        sev_summary = ", ".join(
+            f"{count} {sev.lower()}" for sev, count in sev_counts.items() if count > 0
+        )
+        deductions["vulnerabilities"] = {
+            "count": len(vuln_findings),
+            "penalty": vuln_penalty,
+            "description": f"Vulnerability & exposure findings (capped at -40%): {sev_summary} (-{vuln_penalty}%)"
+        }
+    score -= vuln_penalty
+
+    # 5. SEO & Structure anomalies
     # Let's count anomalies
     seo_anomalies_count = 0
     seo_details = []
